@@ -175,7 +175,7 @@ class Seq2Seq2Decoder(nn.Module):
         # hidden = torch.div(hidden, norms.unsqueeze(1).expand_as(hidden))
 
         if noise and self.noise_r > 0:
-            gauss_noise = torch.normal(means=torch.zeros(hidden.size()),
+            gauss_noise = torch.normal(mean=torch.zeros(hidden.size()),
                                        std=self.noise_r)
             hidden = hidden + to_gpu(self.gpu, Variable(gauss_noise))
 
@@ -225,9 +225,10 @@ class Seq2Seq2Decoder(nn.Module):
             state = self.init_hidden(batch_size)
 
         # <sos>
-        self.start_symbols.data.resize_(batch_size, 1)
-        self.start_symbols.data.fill_(1)
-        self.start_symbols = to_gpu(self.gpu, self.start_symbols)
+        with torch.no_grad():
+          self.start_symbols.resize_(batch_size, 1)
+          self.start_symbols.fill_(1)
+          self.start_symbols = to_gpu(self.gpu, self.start_symbols)
 
         if whichdecoder == 1:
             embedding = self.embedding_decoder1(self.start_symbols)

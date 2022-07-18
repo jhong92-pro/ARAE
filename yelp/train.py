@@ -255,7 +255,8 @@ def train_classifier(whichclass, batch):
     classify_loss = F.binary_cross_entropy(scores.squeeze(1), labels)
     classify_loss.backward()
     optimizer_classify.step()
-    classify_loss = classify_loss.cpu().data[0]
+    # classify_loss = classify_loss.cpu().data[0]
+    classify_loss = classify_loss.item()  # 로그 찍을 때 씀
 
     pred = scores.data.round().squeeze(1)
     accuracy = pred.eq(labels.data).float().mean()
@@ -292,72 +293,73 @@ def classifier_regularize(whichclass, batch):
 
 def evaluate_autoencoder(whichdecoder, data_source, epoch):
     # Turn on evaluation mode which disables dropout.
-    autoencoder.eval()
-    total_loss = 0
-    ntokens = len(corpus.dictionary.word2idx)
-    all_accuracies = 0
-    bcnt = 0
-    for i, batch in enumerate(data_source):
-        source, target, lengths = batch
-        source = to_gpu(args.cuda, Variable(source, volatile=True))
-        target = to_gpu(args.cuda, Variable(target, volatile=True))
+    with torch.no_grad():
+      autoencoder.eval()
+      total_loss = 0
+      ntokens = len(corpus.dictionary.word2idx)
+      all_accuracies = 0
+      bcnt = 0
+      for i, batch in enumerate(data_source):
+          source, target, lengths = batch
+          source = to_gpu(args.cuda, Variable(source))
+          target = to_gpu(args.cuda, Variable(target))
 
-        mask = target.gt(0)
-        masked_target = target.masked_select(mask)
-        # examples x ntokens
-        output_mask = mask.unsqueeze(1).expand(mask.size(0), ntokens)
+          mask = target.gt(0)
+          masked_target = target.masked_select(mask)
+          # examples x ntokens
+          output_mask = mask.unsqueeze(1).expand(mask.size(0), ntokens)
 
-        hidden = autoencoder(0, source, lengths, noise=False, encode_only=True)
+          hidden = autoencoder(0, source, lengths, noise=False, encode_only=True)
 
-        # output: batch x seq_len x ntokens
-        if whichdecoder == 1:
-            output = autoencoder(1, source, lengths, noise=False)
-            flattened_output = output.view(-1, ntokens)
-            masked_output = \
-                flattened_output.masked_select(output_mask).view(-1, ntokens)
-            # accuracy
-            max_vals1, max_indices1 = torch.max(masked_output, 1)
-            all_accuracies += \
-                torch.mean(max_indices1.eq(masked_target).float()).data[0]
-        
-            max_values1, max_indices1 = torch.max(output, 2)
-            max_indices2 = autoencoder.generate(2, hidden, maxlen=50)
-        else:
-            output = autoencoder(2, source, lengths, noise=False)
-            flattened_output = output.view(-1, ntokens)
-            masked_output = \
-                flattened_output.masked_select(output_mask).view(-1, ntokens)
-            # accuracy
-            max_vals2, max_indices2 = torch.max(masked_output, 1)
-            all_accuracies += \
-                torch.mean(max_indices2.eq(masked_target).float()).data[0]
+          # output: batch x seq_len x ntokens
+          if whichdecoder == 1:
+              output = autoencoder(1, source, lengths, noise=False)
+              flattened_output = output.view(-1, ntokens)
+              masked_output = \
+                  flattened_output.masked_select(output_mask).view(-1, ntokens)
+              # accuracy
+              max_vals1, max_indices1 = torch.max(masked_output, 1)
+              all_accuracies += \
+                  torch.mean(max_indices1.eq(masked_target).float())
+          
+              max_values1, max_indices1 = torch.max(output, 2)
+              max_indices2 = autoencoder.generate(2, hidden, maxlen=50)
+          else:
+              output = autoencoder(2, source, lengths, noise=False)
+              flattened_output = output.view(-1, ntokens)
+              masked_output = \
+                  flattened_output.masked_select(output_mask).view(-1, ntokens)
+              # accuracy
+              max_vals2, max_indices2 = torch.max(masked_output, 1)
+              all_accuracies += \
+                  torch.mean(max_indices2.eq(masked_target).float())
 
-            max_values2, max_indices2 = torch.max(output, 2)
-            max_indices1 = autoencoder.generate(1, hidden, maxlen=50)
-        
-        total_loss += criterion_ce(masked_output/args.temp, masked_target).data
-        bcnt += 1
+              max_values2, max_indices2 = torch.max(output, 2)
+              max_indices1 = autoencoder.generate(1, hidden, maxlen=50)
+          
+          total_loss += criterion_ce(masked_output/args.temp, masked_target).data
+          bcnt += 1
 
-        aeoutf_from = "{}/{}_output_decoder_{}_from.txt".format(args.outf, epoch, whichdecoder)
-        aeoutf_tran = "{}/{}_output_decoder_{}_tran.txt".format(args.outf, epoch, whichdecoder)
-        with open(aeoutf_from, 'w') as f_from, open(aeoutf_tran,'w') as f_trans:
-            max_indices1 = \
-                max_indices1.view(output.size(0), -1).data.cpu().numpy()
-            max_indices2 = \
-                max_indices2.view(output.size(0), -1).data.cpu().numpy()
-            target = target.view(output.size(0), -1).data.cpu().numpy()
-            tran_indices = max_indices2 if whichdecoder == 1 else max_indices1
-            for t, tran_idx in zip(target, tran_indices):
-                # real sentence
-                chars = " ".join([corpus.dictionary.idx2word[x] for x in t])
-                f_from.write(chars)
-                f_from.write("\n")
-                # transfer sentence
-                chars = " ".join([corpus.dictionary.idx2word[x] for x in tran_idx])
-                f_trans.write(chars)
-                f_trans.write("\n")
+          aeoutf_from = "{}/{}_output_decoder_{}_from.txt".format(args.outf, epoch, whichdecoder)
+          aeoutf_tran = "{}/{}_output_decoder_{}_tran.txt".format(args.outf, epoch, whichdecoder)
+          with open(aeoutf_from, 'w') as f_from, open(aeoutf_tran,'w') as f_trans:
+              max_indices1 = \
+                  max_indices1.view(output.size(0), -1).data.cpu().numpy()
+              max_indices2 = \
+                  max_indices2.view(output.size(0), -1).data.cpu().numpy()
+              target = target.view(output.size(0), -1).data.cpu().numpy()
+              tran_indices = max_indices2 if whichdecoder == 1 else max_indices1
+              for t, tran_idx in zip(target, tran_indices):
+                  # real sentence
+                  chars = " ".join([corpus.dictionary.idx2word[x] for x in t])
+                  f_from.write(chars)
+                  f_from.write("\n")
+                  # transfer sentence
+                  chars = " ".join([corpus.dictionary.idx2word[x] for x in tran_idx])
+                  f_trans.write(chars)
+                  f_trans.write("\n")
 
-    return total_loss[0] / len(data_source), all_accuracies/bcnt
+    return total_loss / len(data_source), all_accuracies/bcnt
 
 
 def evaluate_generator(whichdecoder, noise, epoch):
@@ -413,8 +415,8 @@ def train_ae(whichdecoder, batch, total_loss_ae, start_time, i):
     if i % args.log_interval == 0 and i > 0:
         probs = F.softmax(masked_output, dim=-1)
         max_vals, max_indices = torch.max(probs, 1)
-        accuracy = torch.mean(max_indices.eq(masked_target).float()).data[0]
-        cur_loss = total_loss_ae[0] / args.log_interval
+        accuracy = torch.mean(max_indices.eq(masked_target).float()).data
+        cur_loss = total_loss_ae / args.log_interval
         elapsed = time.time() - start_time
         print('| epoch {:3d} | {:5d}/{:5d} batches | ms/batch {:5.2f} | '
               'loss {:5.2f} | ppl {:8.2f} | acc {:8.2f}'
@@ -485,7 +487,6 @@ def train_gan_d(whichdecoder, batch):
 
     # batch_size x nhidden
     real_hidden = autoencoder(whichdecoder, source, lengths, noise=False, encode_only=True)
-
     # loss / backprop
     errD_real = gan_disc(real_hidden)
     errD_real.backward(one)
@@ -543,7 +544,8 @@ niter_gan = 1
 fixed_noise = to_gpu(args.cuda,
                      Variable(torch.ones(args.batch_size, args.z_size)))
 fixed_noise.data.normal_(0, 1)
-one = to_gpu(args.cuda, torch.FloatTensor([1]))
+# one = to_gpu(args.cuda, torch.FloatTensor([1]))
+one = to_gpu(args.cuda, torch.tensor(1, dtype=torch.float))
 mone = one * -1
 
 for epoch in range(1, args.epochs+1):
@@ -619,16 +621,26 @@ for epoch in range(1, args.epochs+1):
             print('[%d/%d][%d/%d] Loss_D: %.4f (Loss_D_real: %.4f '
                   'Loss_D_fake: %.4f) Loss_G: %.4f'
                   % (epoch, args.epochs, niter, len(train1_data),
-                     errD.data[0], errD_real.data[0],
-                     errD_fake.data[0], errG.data[0]))
+                     errD.data, errD_real.data,
+                     errD_fake.data, errG.data))
+            # print('[%d/%d][%d/%d] Loss_D: %.4f (Loss_D_real: %.4f '
+            #       'Loss_D_fake: %.4f) Loss_G: %.4f'
+            #       % (epoch, args.epochs, niter, len(train1_data),
+            #          errD.data[0], errD_real.data[0],
+            #          errD_fake.data[0], errG.data[0]))
             print("Classify loss: {:5.2f} | Classify accuracy: {:3.3f}\n".format(
                     classify_loss, classify_acc))
             with open("{}/log.txt".format(args.outf), 'a') as f:
                 f.write('[%d/%d][%d/%d] Loss_D: %.4f (Loss_D_real: %.4f '
                         'Loss_D_fake: %.4f) Loss_G: %.4f\n'
                         % (epoch, args.epochs, niter, len(train1_data),
-                           errD.data[0], errD_real.data[0],
-                           errD_fake.data[0], errG.data[0]))
+                           errD.data, errD_real.data,
+                           errD_fake.data, errG.data))
+                # f.write('[%d/%d][%d/%d] Loss_D: %.4f (Loss_D_real: %.4f '
+                #         'Loss_D_fake: %.4f) Loss_G: %.4f\n'
+                #         % (epoch, args.epochs, niter, len(train1_data),
+                #            errD.data[0], errD_real.data[0],
+                #            errD_fake.data[0], errG.data[0]))                           
                 f.write("Classify loss: {:5.2f} | Classify accuracy: {:3.3f}\n".format(
                         classify_loss, classify_acc))
 
